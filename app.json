@@ -1,6 +1,7 @@
 {
   "expo": {
-    "name": "kunster-app",
+    "name": "昆斯特工務",
+    "owner": "davey790",
     "slug": "kunster-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -13,17 +14,31 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.kunster.works",
+      "buildNumber": "2",
+      "infoPlist": {
+        "NSCameraUsageDescription": "用於上傳現場施工照片",
+        "NSPhotoLibraryUsageDescription": "用於選取施工照片",
+        "NSMicrophoneUsageDescription": "用於錄製現場說明",
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "package": "com.kunster.works"
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [],
+    "extra": {
+      "eas": {
+        "projectId": "878fab0d-1f93-4e5f-9aa5-8d256265f8f0"
+      }
     }
   }
 }
