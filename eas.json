@@ -21,7 +21,8 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "davyliu0423@icloud.com"
+        "appleId": "davyliu0423@icloud.com",
+        "ascAppId": "6775704835"
       }
     }
   }
