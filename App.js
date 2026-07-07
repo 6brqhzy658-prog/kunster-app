@@ -187,6 +187,7 @@ export default function App() {
         startInLoadingState={false}
         javaScriptEnabled={true}
         domStorageEnabled={true}
+        geolocationEnabled={true}
         // 開啟 WebView 快取：搭配伺服器端的 Cache-Control 標頭
         // （HTML 30 秒、CSS/JS/圖片 1 小時）重複使用已下載的資源，
         // 避免每次切換頁面都整份重新下載＋解析，是流暢度的關鍵設定。

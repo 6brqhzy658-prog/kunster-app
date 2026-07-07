@@ -21,7 +21,8 @@
         "NSCameraUsageDescription": "用於上傳現場施工照片",
         "NSPhotoLibraryUsageDescription": "用於選取施工照片",
         "NSMicrophoneUsageDescription": "用於錄製現場說明",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSLocationWhenInUseUsageDescription": "打卡時用於確認您已抵達案場（僅打卡當下取得位置，不會背景追蹤）"
       }
     },
     "android": {
@@ -29,7 +30,11 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.kunster.works"
+      "package": "com.kunster.works",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
