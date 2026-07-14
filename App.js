@@ -25,7 +25,7 @@ function getLocationModule() {
 // 隱藏開發環境警告 banner
 LogBox.ignoreAllLogs();
 
-const APP_BUILD_VERSION = '20260714_0950';
+const APP_BUILD_VERSION = '20260714_1015';
 const CLOUD_ORIGIN = 'https://tender-expression-production-9798.up.railway.app';
 const CLOUD_URL = `${CLOUD_ORIGIN}/?app_v=${APP_BUILD_VERSION}`;
 const LOCAL_URL = 'http://127.0.0.1:8898/login?role=admin&app_v=20260601_1731';
