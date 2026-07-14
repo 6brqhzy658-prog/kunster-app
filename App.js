@@ -6,14 +6,20 @@ import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 
-// expo-location 用防護式載入：舊的原生二進位（還沒重新 build 的開發機/舊版
-// TestFlight）沒有 ExpoLocation 原生模組，直接 import 會讓 APP 啟動就崩潰。
-// 載不到就當作拿不到定位，打卡走既有的「無定位照樣打卡」流程
-let Location = null;
-try {
-  Location = require('expo-location');
-} catch (e) {
-  Location = null;
+// expo-location 完全延遲載入：舊的原生二進位（還沒重新 build 的開發機/舊版
+// TestFlight）沒有 ExpoLocation 原生模組，啟動階段碰到就會崩潰。
+// 改成「第一次要定位時」才 require，載不到就當作拿不到定位，
+// 打卡走既有的「無定位照樣打卡」流程
+let _locationModule; // undefined=還沒試過, null=載入失敗
+function getLocationModule() {
+  if (_locationModule === undefined) {
+    try {
+      _locationModule = require('expo-location');
+    } catch (e) {
+      _locationModule = null;
+    }
+  }
+  return _locationModule;
 }
 
 // 隱藏開發環境警告 banner
@@ -201,12 +207,13 @@ export default function App() {
         navigator.geolocation.getCurrentPosition = function (success, error, options) {
           var id = 'g' + (++geoSeq);
           var entry = { success: success, error: error };
+          // 與網頁打卡看門狗對齊：預設 4 秒，避免卡在「定位中…」
           entry.timer = setTimeout(function () {
             if (geoCallbacks[id]) {
               delete geoCallbacks[id];
               if (error) error({ code: 3, message: 'timeout' });
             }
-          }, (options && options.timeout) || 10000);
+          }, (options && options.timeout) || 4000);
           geoCallbacks[id] = entry;
           try {
             window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'getCurrentPosition', id: id }));
@@ -232,6 +239,7 @@ export default function App() {
       webViewRef.current?.injectJavaScript(js);
     };
     try {
+      const Location = getLocationModule();
       if (!Location) {
         reply(false, { message: 'module unavailable' });
         return;
