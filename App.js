@@ -4,8 +4,17 @@ import { StyleSheet, View, SafeAreaView, LogBox, AppState, Platform } from 'reac
 import { WebView } from 'react-native-webview';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
-import * as Location from 'expo-location';
 import Constants from 'expo-constants';
+
+// expo-location 用防護式載入：舊的原生二進位（還沒重新 build 的開發機/舊版
+// TestFlight）沒有 ExpoLocation 原生模組，直接 import 會讓 APP 啟動就崩潰。
+// 載不到就當作拿不到定位，打卡走既有的「無定位照樣打卡」流程
+let Location = null;
+try {
+  Location = require('expo-location');
+} catch (e) {
+  Location = null;
+}
 
 // 隱藏開發環境警告 banner
 LogBox.ignoreAllLogs();
@@ -223,6 +232,10 @@ export default function App() {
       webViewRef.current?.injectJavaScript(js);
     };
     try {
+      if (!Location) {
+        reply(false, { message: 'module unavailable' });
+        return;
+      }
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         reply(false, { message: 'permission denied' });
