@@ -4,12 +4,13 @@ import { StyleSheet, View, SafeAreaView, LogBox, AppState, Platform } from 'reac
 import { WebView } from 'react-native-webview';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
+import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 
 // 隱藏開發環境警告 banner
 LogBox.ignoreAllLogs();
 
-const APP_BUILD_VERSION = '20260603_1935';
+const APP_BUILD_VERSION = '20260714_0950';
 const CLOUD_ORIGIN = 'https://tender-expression-production-9798.up.railway.app';
 const CLOUD_URL = `${CLOUD_ORIGIN}/?app_v=${APP_BUILD_VERSION}`;
 const LOCAL_URL = 'http://127.0.0.1:8898/login?role=admin&app_v=20260601_1731';
@@ -160,9 +161,83 @@ export default function App() {
       window.addEventListener('pageshow', restoreScroll);
       window.addEventListener('focus', restoreScroll);
       restoreScroll();
+
+      // ── 原生定位橋接：WKWebView 的 navigator.geolocation 在 RN WebView 內
+      // 拿不到座標（權限流程不會被觸發，打卡全部變成「未取得定位」）。
+      // 改成攔截 getCurrentPosition，請 APP 用 expo-location 原生取得座標後回填 ──
+      var geoSeq = 0;
+      var geoCallbacks = {};
+      window.__kunsterGeoResult = function (id, ok, payload) {
+        var cb = geoCallbacks[id];
+        if (!cb) return;
+        delete geoCallbacks[id];
+        if (cb.timer) clearTimeout(cb.timer);
+        try {
+          if (ok) {
+            cb.success({
+              coords: {
+                latitude: payload.latitude,
+                longitude: payload.longitude,
+                accuracy: payload.accuracy || 0,
+                altitude: null, altitudeAccuracy: null, heading: null, speed: null
+              },
+              timestamp: Date.now()
+            });
+          } else if (cb.error) {
+            cb.error({ code: 1, message: (payload && payload.message) || 'unavailable' });
+          }
+        } catch (e) {}
+      };
+      if (window.ReactNativeWebView && navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition = function (success, error, options) {
+          var id = 'g' + (++geoSeq);
+          var entry = { success: success, error: error };
+          entry.timer = setTimeout(function () {
+            if (geoCallbacks[id]) {
+              delete geoCallbacks[id];
+              if (error) error({ code: 3, message: 'timeout' });
+            }
+          }, (options && options.timeout) || 10000);
+          geoCallbacks[id] = entry;
+          try {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'getCurrentPosition', id: id }));
+          } catch (e) {
+            delete geoCallbacks[id];
+            clearTimeout(entry.timer);
+            if (error) error({ code: 2, message: 'bridge unavailable' });
+          }
+        };
+      }
     })();
     true;
   `, []);
+
+  // 網頁端要定位時，用 expo-location 原生取得座標回填給 WebView。
+  // 權限被拒或取不到就回失敗，讓網頁端走「無定位照樣打卡」的既有流程
+  const handleMessage = useCallback(async (event) => {
+    let msg = null;
+    try { msg = JSON.parse(event?.nativeEvent?.data || ''); } catch (e) { return; }
+    if (!msg || msg.type !== 'getCurrentPosition' || !msg.id) return;
+    const reply = (ok, payload) => {
+      const js = `window.__kunsterGeoResult && window.__kunsterGeoResult(${JSON.stringify(msg.id)}, ${ok ? 'true' : 'false'}, ${JSON.stringify(payload || {})}); true;`;
+      webViewRef.current?.injectJavaScript(js);
+    };
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        reply(false, { message: 'permission denied' });
+        return;
+      }
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      reply(true, {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy || 0,
+      });
+    } catch (e) {
+      reply(false, { message: 'unavailable' });
+    }
+  }, []);
 
   const handleNavigationStateChange = useCallback((navState) => {
     if (navState.url) {
@@ -196,6 +271,7 @@ export default function App() {
         sharedCookiesEnabled={true}
         thirdPartyCookiesEnabled={true}
         injectedJavaScriptBeforeContentLoaded={injectedBeforeContentLoaded}
+        onMessage={handleMessage}
         onNavigationStateChange={handleNavigationStateChange}
         onContentProcessDidTerminate={handleContentProcessDidTerminate}
         onLoadEnd={handleLoadEnd}

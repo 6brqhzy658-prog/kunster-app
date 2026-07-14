@@ -46,6 +46,12 @@
           "icon": "./assets/icon.png",
           "color": "#007AFF"
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "打卡時用於確認您已抵達案場（僅打卡當下取得位置，不會背景追蹤）"
+        }
       ]
     ],
     "extra": {
