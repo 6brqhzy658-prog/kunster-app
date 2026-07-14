@@ -25,7 +25,7 @@ function getLocationModule() {
 // 隱藏開發環境警告 banner
 LogBox.ignoreAllLogs();
 
-const APP_BUILD_VERSION = '20260714_1015';
+const APP_BUILD_VERSION = '20260714_1030';
 const CLOUD_ORIGIN = 'https://tender-expression-production-9798.up.railway.app';
 const CLOUD_URL = `${CLOUD_ORIGIN}/?app_v=${APP_BUILD_VERSION}`;
 const LOCAL_URL = 'http://127.0.0.1:8898/login?role=admin&app_v=20260601_1731';
@@ -207,16 +207,25 @@ export default function App() {
         navigator.geolocation.getCurrentPosition = function (success, error, options) {
           var id = 'g' + (++geoSeq);
           var entry = { success: success, error: error };
-          // 與網頁打卡看門狗對齊：預設 4 秒，避免卡在「定位中…」
+          // 原生路徑可能要先跳出 iOS 權限詢問，不能沿用網頁端 3～4 秒的 timeout，
+          // 否則師傅第一次按「允許」時 callback 早已被清掉，永遠記成「未取得定位」。
+          // 下限 20 秒：夠按權限 + 冷啟動 GPS；仍設上限，避免無限卡住。
+          var reqTimeout = (options && options.timeout) || 0;
+          var bridgeTimeout = Math.max(reqTimeout, 20000);
           entry.timer = setTimeout(function () {
             if (geoCallbacks[id]) {
               delete geoCallbacks[id];
               if (error) error({ code: 3, message: 'timeout' });
             }
-          }, (options && options.timeout) || 4000);
+          }, bridgeTimeout);
           geoCallbacks[id] = entry;
           try {
-            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'getCurrentPosition', id: id }));
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'getCurrentPosition',
+              id: id,
+              // 給原生端參考；權限對話框時間不算在 GPS 精度等待裡
+              timeoutMs: bridgeTimeout
+            }));
           } catch (e) {
             delete geoCallbacks[id];
             clearTimeout(entry.timer);
@@ -229,7 +238,9 @@ export default function App() {
   `, []);
 
   // 網頁端要定位時，用 expo-location 原生取得座標回填給 WebView。
-  // 權限被拒或取不到就回失敗，讓網頁端走「無定位照樣打卡」的既有流程
+  // 權限被拒或取不到就回失敗，讓網頁端走「無定位照樣打卡」的既有流程。
+  // 注意：requestForegroundPermissionsAsync 會等使用者按允許/拒絕，
+  // 這段等待時間可能 > 網頁端原本的 4 秒 timeout，所以 bridge 端必須夠長。
   const handleMessage = useCallback(async (event) => {
     let msg = null;
     try { msg = JSON.parse(event?.nativeEvent?.data || ''); } catch (e) { return; }
@@ -249,14 +260,18 @@ export default function App() {
         reply(false, { message: 'permission denied' });
         return;
       }
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      // Balanced：足夠打卡距離驗證，比 High 快；給 12 秒上限避免現場無訊號時卡死
+      const pos = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('gps-timeout')), 12000)),
+      ]);
       reply(true, {
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
         accuracy: pos.coords.accuracy || 0,
       });
     } catch (e) {
-      reply(false, { message: 'unavailable' });
+      reply(false, { message: (e && e.message) || 'unavailable' });
     }
   }, []);
 
