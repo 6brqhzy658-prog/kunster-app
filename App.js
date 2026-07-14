@@ -1,15 +1,23 @@
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View, SafeAreaView, LogBox, AppState, Platform } from 'react-native';
+import {
+  StyleSheet,
+  View,
+  SafeAreaView,
+  LogBox,
+  AppState,
+  Platform,
+  Text,
+  Pressable,
+  ActivityIndicator,
+  Linking,
+} from 'react-native';
 import { WebView } from 'react-native-webview';
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 
-// expo-location 完全延遲載入：舊的原生二進位（還沒重新 build 的開發機/舊版
-// TestFlight）沒有 ExpoLocation 原生模組，啟動階段碰到就會崩潰。
-// 改成「第一次要定位時」才 require，載不到就當作拿不到定位，
-// 打卡走既有的「無定位照樣打卡」流程
+// expo-location 完全延遲載入：舊的原生二進位沒有模組時，啟動不碰就不崩潰。
 let _locationModule; // undefined=還沒試過, null=載入失敗
 function getLocationModule() {
   if (_locationModule === undefined) {
@@ -22,19 +30,23 @@ function getLocationModule() {
   return _locationModule;
 }
 
-// 隱藏開發環境警告 banner
-LogBox.ignoreAllLogs();
+// 開發環境保留警告；正式版隱藏 banner
+if (!__DEV__) {
+  LogBox.ignoreAllLogs();
+}
 
-const APP_BUILD_VERSION = '20260714_1030';
+const APP_BUILD_VERSION = '20260714_fast1';
 const CLOUD_ORIGIN = 'https://tender-expression-production-9798.up.railway.app';
 const CLOUD_URL = `${CLOUD_ORIGIN}/?app_v=${APP_BUILD_VERSION}`;
 const LOCAL_URL = 'http://127.0.0.1:8898/login?role=admin&app_v=20260601_1731';
-// 正式上線：改用雲端；本地開發時換回 LOCAL_URL
 const APP_URL = CLOUD_URL;
-const API_ORIGIN = CLOUD_ORIGIN; // 推播 token 註冊打這個 origin，跟 WebView 共用登入 cookie
+const API_ORIGIN = CLOUD_ORIGIN;
 
-// App 在前景時收到推播，也要照樣顯示橫幅／音效／更新角標，
-// 不然師傅開著 app 在看別的畫面時會完全沒感覺
+// 推播註冊節流：避免每次回前景都打 API
+let _lastPushRegisterAt = 0;
+let _lastPushToken = '';
+const PUSH_REGISTER_MIN_MS = 60 * 1000;
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowAlert: true,
@@ -45,12 +57,14 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// 把 Expo Push Token 送到後端，記住「這支手機屬於哪個登入的使用者」。
-// 模擬器拿不到真正的推播 token（iOS 限制），所以先確認是實機才繼續；
-// 還沒登入時後端會擋掉（401），不算錯誤，下次開 app 或登入後會再試一次。
-async function registerForPushNotificationsAsync() {
+async function registerForPushNotificationsAsync(force = false) {
   try {
     if (!Device.isDevice) return;
+
+    const now = Date.now();
+    if (!force && now - _lastPushRegisterAt < PUSH_REGISTER_MIN_MS && _lastPushToken) {
+      return;
+    }
 
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
@@ -74,71 +88,135 @@ async function registerForPushNotificationsAsync() {
     const token = tokenResponse?.data;
     if (!token) return;
 
-    await fetch(`${API_ORIGIN}/api/push/register`, {
+    if (!force && token === _lastPushToken && now - _lastPushRegisterAt < PUSH_REGISTER_MIN_MS * 5) {
+      return;
+    }
+
+    const res = await fetch(`${API_ORIGIN}/api/push/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({ token, platform: Platform.OS }),
     });
+    if (res.ok) {
+      _lastPushRegisterAt = Date.now();
+      _lastPushToken = token;
+    }
   } catch (e) {
-    // 推播註冊失敗不影響 app 主要功能（網頁本身），靜默放過即可
+    // 推播失敗不擋主流程
   }
+}
+
+function isSameOrigin(url) {
+  try {
+    return new URL(url).origin === CLOUD_ORIGIN;
+  } catch (e) {
+    return false;
+  }
+}
+
+function shouldOpenExternally(url) {
+  if (!url) return false;
+  if (url.startsWith('tel:') || url.startsWith('mailto:') || url.startsWith('sms:')) return true;
+  try {
+    const u = new URL(url);
+    const host = (u.hostname || '').toLowerCase();
+    if (host.includes('maps.google.') || host.includes('maps.apple.') || host === 'goo.gl') return true;
+    if (u.protocol === 'http:' || u.protocol === 'https:') {
+      // 非本站：用系統瀏覽器開，避免 WebView 卡住或空白
+      if (u.origin !== CLOUD_ORIGIN) return true;
+    }
+  } catch (e) {}
+  return false;
 }
 
 export default function App() {
   const webViewRef = useRef(null);
   const lastUrlRef = useRef(APP_URL);
-  // 啟動畫面背景是白色，但 App 介面是淺灰色（#F5F5F7）；如果一啟動就切成灰色，
-  // 在網頁還沒載入完成前會先看到一塊空白灰畫面，跟白色啟動畫面疊在一起變成
-  // 「白→灰→空白→內容」幾次明顯的閃色。改成：內容真正載入完成前維持白底，
-  // 載入完成才一次性換成灰底＋畫面內容，閃色感會明顯減少。
   const [contentReady, setContentReady] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [loadingHint, setLoadingHint] = useState(true);
 
   const handleLoadEnd = useCallback(() => {
     setContentReady(true);
+    setLoadingHint(false);
+    setLoadError(null);
   }, []);
 
-  // 萬一網路異常導致 onLoadEnd 沒有觸發，幾秒後還是要顯示出來，
-  // 不要讓使用者卡在白畫面動彈不得
+  const handleLoadStart = useCallback(() => {
+    setLoadingHint(true);
+    setLoadError(null);
+  }, []);
+
+  const handleError = useCallback(() => {
+    setLoadingHint(false);
+    setLoadError('無法連線，請檢查網路後重試');
+    setContentReady(true);
+  }, []);
+
+  const handleHttpError = useCallback((e) => {
+    const code = e?.nativeEvent?.statusCode;
+    if (code && code >= 500) {
+      setLoadingHint(false);
+      setLoadError(`伺服器忙碌（${code}），請稍後再試`);
+      setContentReady(true);
+    }
+  }, []);
+
+  const retryLoad = useCallback(() => {
+    setLoadError(null);
+    setLoadingHint(true);
+    setContentReady(false);
+    setReloadKey((k) => k + 1);
+  }, []);
+
+  // 保險：最長 8 秒結束啟動白屏（比 6 秒稍長，給弱網）
   useEffect(() => {
-    const t = setTimeout(() => setContentReady(true), 6000);
+    const t = setTimeout(() => {
+      setContentReady(true);
+      setLoadingHint(false);
+    }, 8000);
     return () => clearTimeout(t);
-  }, []);
+  }, [reloadKey]);
 
-  // 內容第一次載入完成後嘗試註冊推播 token；如果這時候還沒登入，後端會擋掉，
-  // 不算錯誤。另外每次 app 從背景回到前景也再試一次，涵蓋「剛剛才登入」的情況。
   useEffect(() => {
-    if (!contentReady) return;
+    if (!contentReady || loadError) return;
     registerForPushNotificationsAsync();
-  }, [contentReady]);
+  }, [contentReady, loadError]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
-        registerForPushNotificationsAsync();
+        registerForPushNotificationsAsync(false);
       }
     });
     return () => sub.remove();
   }, []);
 
-  // 點擊系統通知時，把 WebView 導去通知裡帶的網址（例如某個案場頁面），
-  // 不要只是把 app 帶到前景卻停在原來的畫面
   useEffect(() => {
     const sub = Notifications.addNotificationResponseReceivedListener((response) => {
       const url = response?.notification?.request?.content?.data?.url;
       if (url && webViewRef.current) {
         const target = /^https?:\/\//.test(url) ? url : `${API_ORIGIN}${url}`;
-        webViewRef.current.injectJavaScript(
-          `window.location.href=${JSON.stringify(target)}; true;`
-        );
+        if (isSameOrigin(target) || target.startsWith(API_ORIGIN)) {
+          lastUrlRef.current = target;
+          webViewRef.current.injectJavaScript(
+            `window.location.href=${JSON.stringify(target)}; true;`
+          );
+        }
       }
     });
     return () => sub.remove();
   }, []);
 
-  const source = useMemo(() => ({ uri: APP_URL }), []);
+  const source = useMemo(
+    () => ({ uri: lastUrlRef.current || APP_URL }),
+    [reloadKey]
+  );
 
-  const injectedBeforeContentLoaded = useMemo(() => `
+  const injectedBeforeContentLoaded = useMemo(
+    () => `
     (function () {
       if (window.__kunsterNativeBridgeInstalled) return;
       window.__kunsterNativeBridgeInstalled = true;
@@ -177,9 +255,7 @@ export default function App() {
       window.addEventListener('focus', restoreScroll);
       restoreScroll();
 
-      // ── 原生定位橋接：WKWebView 的 navigator.geolocation 在 RN WebView 內
-      // 拿不到座標（權限流程不會被觸發，打卡全部變成「未取得定位」）。
-      // 改成攔截 getCurrentPosition，請 APP 用 expo-location 原生取得座標後回填 ──
+      // 原生定位橋接
       var geoSeq = 0;
       var geoCallbacks = {};
       window.__kunsterGeoResult = function (id, ok, payload) {
@@ -207,9 +283,6 @@ export default function App() {
         navigator.geolocation.getCurrentPosition = function (success, error, options) {
           var id = 'g' + (++geoSeq);
           var entry = { success: success, error: error };
-          // 原生路徑可能要先跳出 iOS 權限詢問，不能沿用網頁端 3～4 秒的 timeout，
-          // 否則師傅第一次按「允許」時 callback 早已被清掉，永遠記成「未取得定位」。
-          // 下限 20 秒：夠按權限 + 冷啟動 GPS；仍設上限，避免無限卡住。
           var reqTimeout = (options && options.timeout) || 0;
           var bridgeTimeout = Math.max(reqTimeout, 20000);
           entry.timer = setTimeout(function () {
@@ -223,7 +296,6 @@ export default function App() {
             window.ReactNativeWebView.postMessage(JSON.stringify({
               type: 'getCurrentPosition',
               id: id,
-              // 給原生端參考；權限對話框時間不算在 GPS 精度等待裡
               timeoutMs: bridgeTimeout
             }));
           } catch (e) {
@@ -233,18 +305,46 @@ export default function App() {
           }
         };
       }
+
+      // 登入後通知原生重註冊推播
+      try {
+        var _origFetch = window.fetch;
+        if (_origFetch && !window.__kunsterFetchPatched) {
+          window.__kunsterFetchPatched = true;
+          window.fetch = function () {
+            return _origFetch.apply(this, arguments).then(function (res) {
+              try {
+                var u = String(arguments[0] || '');
+                if (res && res.ok && (u.indexOf('/login') >= 0 || u.indexOf('/api/login') >= 0)) {
+                  window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'authMaybe' }));
+                }
+              } catch (e) {}
+              return res;
+            });
+          };
+        }
+      } catch (e) {}
     })();
     true;
-  `, []);
+  `,
+    []
+  );
 
-  // 網頁端要定位時，用 expo-location 原生取得座標回填給 WebView。
-  // 權限被拒或取不到就回失敗，讓網頁端走「無定位照樣打卡」的既有流程。
-  // 注意：requestForegroundPermissionsAsync 會等使用者按允許/拒絕，
-  // 這段等待時間可能 > 網頁端原本的 4 秒 timeout，所以 bridge 端必須夠長。
   const handleMessage = useCallback(async (event) => {
     let msg = null;
-    try { msg = JSON.parse(event?.nativeEvent?.data || ''); } catch (e) { return; }
-    if (!msg || msg.type !== 'getCurrentPosition' || !msg.id) return;
+    try {
+      msg = JSON.parse(event?.nativeEvent?.data || '');
+    } catch (e) {
+      return;
+    }
+    if (!msg || !msg.type) return;
+
+    if (msg.type === 'authMaybe' || msg.type === 'login') {
+      registerForPushNotificationsAsync(true);
+      return;
+    }
+
+    if (msg.type !== 'getCurrentPosition' || !msg.id) return;
     const reply = (ok, payload) => {
       const js = `window.__kunsterGeoResult && window.__kunsterGeoResult(${JSON.stringify(msg.id)}, ${ok ? 'true' : 'false'}, ${JSON.stringify(payload || {})}); true;`;
       webViewRef.current?.injectJavaScript(js);
@@ -260,7 +360,21 @@ export default function App() {
         reply(false, { message: 'permission denied' });
         return;
       }
-      // Balanced：足夠打卡距離驗證，比 High 快；給 12 秒上限避免現場無訊號時卡死
+      // 已授權時先試 last known（快），沒有再精準取
+      try {
+        const last = await Location.getLastKnownPositionAsync();
+        if (last?.coords && (Date.now() - (last.timestamp || 0) < 120000)) {
+          reply(true, {
+            latitude: last.coords.latitude,
+            longitude: last.coords.longitude,
+            accuracy: last.coords.accuracy || 0,
+          });
+          // 背景更新一筆較新座標（不擋 UI）
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }).catch(() => {});
+          return;
+        }
+      } catch (e) {}
+
       const pos = await Promise.race([
         Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('gps-timeout')), 12000)),
@@ -276,49 +390,83 @@ export default function App() {
   }, []);
 
   const handleNavigationStateChange = useCallback((navState) => {
-    if (navState.url) {
+    if (navState?.url) {
       lastUrlRef.current = navState.url;
+    }
+    if (navState?.loading === false) {
+      setLoadingHint(false);
     }
   }, []);
 
+  const handleShouldStart = useCallback((req) => {
+    const url = req?.url || '';
+    if (!url || url === 'about:blank') return true;
+    if (shouldOpenExternally(url)) {
+      Linking.openURL(url).catch(() => {});
+      return false;
+    }
+    return true;
+  }, []);
+
   const handleContentProcessDidTerminate = useCallback(() => {
-    // iOS may reclaim WKWebView under memory pressure. If it happens, reload the last page,
-    // not the app root, so returning from another app lands back on the current job site.
-    webViewRef.current?.reload();
+    // iOS 記憶體回收 WKWebView 後，回到最後一頁而不是首頁
+    const uri = lastUrlRef.current || APP_URL;
+    setReloadKey((k) => k + 1);
+    lastUrlRef.current = uri;
   }, []);
 
   return (
     <SafeAreaView style={[styles.safeArea, !contentReady && styles.safeAreaLoading]}>
       <View style={[styles.container, !contentReady && styles.containerLoading]}>
-      <StatusBar style="dark" />
-      <WebView
-        ref={webViewRef}
-        source={source}
-        style={[styles.webview, !contentReady && styles.webviewLoading]}
-        startInLoadingState={false}
-        javaScriptEnabled={true}
-        domStorageEnabled={true}
-        geolocationEnabled={true}
-        // 開啟 WebView 快取：搭配伺服器端的 Cache-Control 標頭
-        // （HTML 30 秒、CSS/JS/圖片 1 小時）重複使用已下載的資源，
-        // 避免每次切換頁面都整份重新下載＋解析，是流暢度的關鍵設定。
-        cacheEnabled={true}
-        cacheMode="LOAD_DEFAULT"
-        sharedCookiesEnabled={true}
-        thirdPartyCookiesEnabled={true}
-        injectedJavaScriptBeforeContentLoaded={injectedBeforeContentLoaded}
-        onMessage={handleMessage}
-        onNavigationStateChange={handleNavigationStateChange}
-        onContentProcessDidTerminate={handleContentProcessDidTerminate}
-        onLoadEnd={handleLoadEnd}
-        allowsBackForwardNavigationGestures={true}
-        allowsLinkPreview={false}
-        allowsInlineMediaPlayback={true}
-        decelerationRate="normal"
-        setSupportMultipleWindows={false}
-        mediaPlaybackRequiresUserAction={false}
-        backgroundColor={contentReady ? '#F5F5F7' : '#ffffff'}
-      />
+        <StatusBar style="dark" />
+        <WebView
+          key={reloadKey}
+          ref={webViewRef}
+          source={source}
+          style={[styles.webview, !contentReady && styles.webviewLoading]}
+          startInLoadingState={false}
+          javaScriptEnabled={true}
+          domStorageEnabled={true}
+          geolocationEnabled={true}
+          cacheEnabled={true}
+          cacheMode="LOAD_DEFAULT"
+          sharedCookiesEnabled={true}
+          thirdPartyCookiesEnabled={true}
+          injectedJavaScriptBeforeContentLoaded={injectedBeforeContentLoaded}
+          onMessage={handleMessage}
+          onNavigationStateChange={handleNavigationStateChange}
+          onShouldStartLoadWithRequest={handleShouldStart}
+          onContentProcessDidTerminate={handleContentProcessDidTerminate}
+          onLoadStart={handleLoadStart}
+          onLoadEnd={handleLoadEnd}
+          onError={handleError}
+          onHttpError={handleHttpError}
+          allowsBackForwardNavigationGestures={true}
+          allowsLinkPreview={false}
+          allowsInlineMediaPlayback={true}
+          decelerationRate="normal"
+          setSupportMultipleWindows={false}
+          mediaPlaybackRequiresUserAction={false}
+          backgroundColor={contentReady ? '#F5F5F7' : '#ffffff'}
+          applicationNameForUserAgent="KunsterApp/1.0"
+        />
+
+        {loadingHint && !loadError && (
+          <View style={styles.loadingOverlay} pointerEvents="none">
+            <ActivityIndicator size="large" color="#1677E8" />
+            <Text style={styles.loadingText}>載入中…</Text>
+          </View>
+        )}
+
+        {loadError && (
+          <View style={styles.errorOverlay}>
+            <Text style={styles.errorTitle}>連線不穩</Text>
+            <Text style={styles.errorBody}>{loadError}</Text>
+            <Pressable style={styles.retryBtn} onPress={retryLoad}>
+              <Text style={styles.retryBtnText}>重新載入</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
     </SafeAreaView>
   );
@@ -327,18 +475,16 @@ export default function App() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#F5F5F7',   // 頂部 safe area 顏色（topbar 同色）
+    backgroundColor: '#F5F5F7',
   },
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F7',   // 底部 safe area 顏色（nav 同色）
+    backgroundColor: '#F5F5F7',
   },
   webview: {
     flex: 1,
     backgroundColor: '#F5F5F7',
   },
-  // 內容還沒載入完成前維持跟啟動畫面一樣的白底，避免「白→灰→空白→內容」
-  // 連續閃色；改成載入完成才一次性換成灰底＋畫面內容
   safeAreaLoading: {
     backgroundColor: '#ffffff',
   },
@@ -347,5 +493,48 @@ const styles = StyleSheet.create({
   },
   webviewLoading: {
     backgroundColor: '#ffffff',
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.72)',
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#182230',
+  },
+  errorOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F5F7FA',
+    paddingHorizontal: 32,
+  },
+  errorTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#182230',
+    marginBottom: 8,
+  },
+  errorBody: {
+    fontSize: 14,
+    color: '#7C8491',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 20,
+  },
+  retryBtn: {
+    backgroundColor: '#1677E8',
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  retryBtnText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });
