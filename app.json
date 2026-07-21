@@ -4,7 +4,7 @@
     "owner": "davey790",
     "slug": "kunster-app",
     "version": "1.0.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
@@ -17,13 +17,31 @@
       "supportsTablet": true,
       "requireFullScreen": true,
       "bundleIdentifier": "com.kunster.works",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "NSCameraUsageDescription": "用於上傳現場施工照片",
         "NSPhotoLibraryUsageDescription": "用於選取施工照片",
         "NSMicrophoneUsageDescription": "用於錄製現場說明",
         "ITSAppUsesNonExemptEncryption": false,
-        "NSLocationWhenInUseUsageDescription": "打卡時用於確認您已抵達案場（僅打卡當下取得位置，不會背景追蹤）"
+        "NSLocationWhenInUseUsageDescription": "打卡時用於確認您已抵達案場（僅打卡當下取得位置，不會背景追蹤）",
+        "NSAllowsLocalNetworking": true,
+        "UIRequiresFullScreen": true,
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationPortraitUpsideDown",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ],
+        "UISupportedInterfaceOrientations~ipad": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationPortraitUpsideDown",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ],
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {
@@ -58,7 +76,8 @@
     "extra": {
       "eas": {
         "projectId": "878fab0d-1f93-4e5f-9aa5-8d256265f8f0"
-      }
+      },
+      "localHost": "192.168.1.190,192.168.1.178"
     }
   }
 }
