@@ -242,6 +242,27 @@ function shouldOpenExternally(url) {
   return false;
 }
 
+function nativePdfTarget(url) {
+  if (Platform.OS !== 'ios' || !url) return null;
+  try {
+    const u = new URL(url);
+    const parts = u.pathname.split('/').filter(Boolean);
+    if (parts.length < 3 || parts[parts.length - 1] !== 'view') return null;
+    const fileIndex = parts.lastIndexOf('file');
+    if (fileIndex < 0 || fileIndex !== parts.length - 3) return null;
+    const encodedName = parts[parts.length - 2] || '';
+    // 目前所有施工 PDF 都保留 .pdf；其他圖片仍使用網站內建縮放器。
+    if (!decodeURIComponent(encodedName).toLowerCase().endsWith('.pdf')) return null;
+    u.pathname = `/${parts.slice(0, -1).join('/')}`;
+    return {
+      url: u.toString(),
+      title: decodeURIComponent(encodedName) || 'PDF 圖面',
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 export default function App() {
   const webViewRef = useRef(null);
   const [originIndex, setOriginIndex] = useState(0);
@@ -260,6 +281,7 @@ export default function App() {
   const [loadError, setLoadError] = useState(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [loadingHint, setLoadingHint] = useState(true);
+  const [nativePdf, setNativePdf] = useState(null);
   const triedFallbackRef = useRef(false);
   const upstreamRetryRef = useRef(0);
   const upstreamTimerRef = useRef(null);
@@ -645,11 +667,30 @@ export default function App() {
   const handleShouldStart = useCallback((req) => {
     const url = req?.url || '';
     if (!url || url === 'about:blank') return true;
+    const pdf = nativePdfTarget(url);
+    if (pdf) {
+      // 取消網站 PDF.js viewer，沿用「同一個」WKWebView 的登入 Cookie 載入原始 PDF。
+      // iOS 會交給系統 PDFKit 顯示，滑動、縮放與頁面快取都走原生實作。
+      setNativePdf(pdf);
+      setLoadingHint(true);
+      setTimeout(() => {
+        webViewRef.current?.injectJavaScript(
+          `window.location.href=${JSON.stringify(pdf.url)}; true;`
+        );
+      }, 0);
+      return false;
+    }
     if (shouldOpenExternally(url)) {
       Linking.openURL(url).catch(() => {});
       return false;
     }
     return true;
+  }, []);
+
+  const closeNativePdf = useCallback(() => {
+    setNativePdf(null);
+    setLoadingHint(false);
+    webViewRef.current?.goBack();
   }, []);
 
   const handleContentProcessDidTerminate = useCallback(() => {
@@ -663,6 +704,15 @@ export default function App() {
     <SafeAreaView style={[styles.safeArea, !contentReady && styles.safeAreaLoading]}>
       <View style={[styles.container, !contentReady && styles.containerLoading]}>
         <StatusBar style="dark" />
+        {nativePdf && (
+          <View style={styles.pdfHeader}>
+            <Pressable style={styles.pdfBackBtn} onPress={closeNativePdf}>
+              <Text style={styles.pdfBackText}>‹ 返回</Text>
+            </Pressable>
+            <Text style={styles.pdfTitle} numberOfLines={1}>{nativePdf.title}</Text>
+            <View style={styles.pdfHeaderSpacer} />
+          </View>
+        )}
         <WebView
           key={`${reloadKey}-${originIndex}`}
           ref={webViewRef}
@@ -743,6 +793,35 @@ const styles = StyleSheet.create({
   },
   webviewLoading: {
     backgroundColor: '#ffffff',
+  },
+  pdfHeader: {
+    height: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#D1D1D6',
+    paddingHorizontal: 12,
+  },
+  pdfBackBtn: {
+    minWidth: 72,
+    height: 44,
+    justifyContent: 'center',
+  },
+  pdfBackText: {
+    color: '#007AFF',
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  pdfTitle: {
+    flex: 1,
+    color: '#1C1C1E',
+    fontSize: 15,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  pdfHeaderSpacer: {
+    width: 72,
   },
   loadingOverlay: {
     ...StyleSheet.absoluteFillObject,
