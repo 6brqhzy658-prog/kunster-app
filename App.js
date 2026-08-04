@@ -35,7 +35,7 @@ if (!__DEV__) {
   LogBox.ignoreAllLogs();
 }
 
-const APP_BUILD_VERSION = '20260721_cookie_isolate';
+const APP_BUILD_VERSION = '20260805_webview_performance';
 const CLOUD_ORIGIN = 'https://tender-expression-production-9798.up.railway.app';
 const CLOUD_URL = `${CLOUD_ORIGIN}/?app_v=${APP_BUILD_VERSION}`;
 // iOS Simulator / 真機預覽：
@@ -336,7 +336,9 @@ export default function App() {
   }, []);
 
   const handleLoadStart = useCallback(() => {
-    setLoadingHint(true);
+    // 一般站內換頁保留上一畫面直到新頁完成，避免每次點選單都蓋上整頁
+    // ActivityIndicator，造成「App 停住」的錯覺。首次啟動與斷線重試本來
+    // 就會主動設 loadingHint=true，因此這裡不需要重複開啟遮罩。
     setLoadError(null);
   }, []);
 
@@ -722,8 +724,10 @@ export default function App() {
           javaScriptEnabled={true}
           domStorageEnabled={true}
           geolocationEnabled={true}
-          cacheEnabled={false}
-          cacheMode="LOAD_NO_CACHE"
+          // App 是 server-rendered WebView；關閉快取會讓每次換頁重新下載全站
+          // CSS／JS／圖片。保留 HTTP 正常驗證機制即可兼顧更新與操作速度。
+          cacheEnabled={true}
+          cacheMode="LOAD_DEFAULT"
           // 必須 false：若 true 會與 Safari 共用 Cookie，同機曾在瀏覽器登過 admin
           // 時，剛下載 App 也會直接進入 admin，沒有登入畫面。
           sharedCookiesEnabled={false}
