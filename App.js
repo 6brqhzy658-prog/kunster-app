@@ -748,7 +748,7 @@ export default function App() {
           allowsBackForwardNavigationGestures={true}
           allowsLinkPreview={false}
           allowsInlineMediaPlayback={true}
-          decelerationRate="normal"
+          {...(Platform.OS === 'ios' ? { decelerationRate: 'normal' } : {})}
           setSupportMultipleWindows={false}
           mediaPlaybackRequiresUserAction={false}
           backgroundColor={contentReady ? '#F5F5F7' : '#ffffff'}

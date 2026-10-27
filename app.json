@@ -3,7 +3,7 @@
     "name": "昆斯特工務",
     "owner": "davey790",
     "slug": "kunster-app",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "default",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -19,6 +19,10 @@
       "bundleIdentifier": "com.kunster.works",
       "buildNumber": "3",
       "infoPlist": {
+        "CFBundleDevelopmentRegion": "zh-Hant",
+        "CFBundleLocalizations": [
+          "zh-Hant"
+        ],
         "NSCameraUsageDescription": "用於上傳現場施工照片",
         "NSPhotoLibraryUsageDescription": "用於選取施工照片",
         "NSMicrophoneUsageDescription": "用於錄製現場說明",
